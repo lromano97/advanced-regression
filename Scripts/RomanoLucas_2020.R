@@ -11,6 +11,7 @@ library(psych)
 library(PerformanceAnalytics)
 library(ggplot2)
 library(car)
+library(olsrr)
 
 setwd("L:/Data/Projects/regresion-avanzada")
 
