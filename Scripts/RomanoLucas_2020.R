@@ -99,15 +99,6 @@ spearman.energy.correlation <- cor(numeric.sample.energy, y = NULL, use = "every
 
 # Dado que las variables no se comportan de manera normal, es necesario aplicar el test de correlación no paramétrico de Spearman y no el de Pearson ya que no cumple el supuesto de normalidad.
 
-# A fines prácticos, dado el alto costo en tiempo de Kendall y que el mismo está diseñado para evaluar variables ordinales se tomara muestra aleatoria mucho más pequeña para poder obtener la correlación.
-small.sample.energy.idx <- sample(seq_len(nrow(energy)), size = 50)
-small.sample.energy <- energy[small.sample.energy.idx]
-small.numeric.idx <- which(sapply(sample.energy, class) %in% c("numeric", "integer"))
-numeric.small.sample.energy <- subset(sample.energy, select = small.numeric.idx)
-kendall.energy.correlation <- cor(numeric.small.sample.energy, y = NULL, use = "everything", method = c("kendall"))
-# TODO: Dejarlo ejecutando el tiempo que sea necesario para análisis
-
-
 corPlot(numeric.sample.energy, cex = 1.1, main = "Matriz de correlacion")
 chart.Correlation(numeric.sample.energy, histogram = TRUE, lm = TRUE, method = "pearson")
 # Nuevamente realizamos el grafico de correlación de las variables, pero en este caso utilizando el método Spearman que no considera que las variables se distribuyan de manera normal.
@@ -333,6 +324,7 @@ predict(robust.model, data.frame(Global_intensity = 0.2, Sub_metering_1 = 0, Sub
 ##### REGRESIÓN LOGISTICA BINARIA ##### 
 
 # Creo train y test split de 70-30 sin repetición.
+set.seed(333)
 train.indices <- createDataPartition(sample.energy$avg.consumption, p=.7, list=F, times=1)
 train.energy.logit <- sample.energy[train.indices]
 test.energy.logit <- sample.energy[-train.indices]
@@ -368,6 +360,50 @@ coefficients(model.4)
 # Obtengo los intervalos de confianza que demuestran que el cero no está incluido, lo cual hace que se rechace la hipótesis nula de que beta n = 0
 confint(model.4, level=0.95) 
 
+##### MEDIDAS INFLUYENTES #####
+
+# Calculo las observaciones influyentes utilizando la distancia de Cook, nuevamente, dado que la cantidad de observaciones es la misma que en los modelos lineales generados previamente el valor limite que se utilizará para evaluar la distancia de Cook es de 1.
+cook.distance.model.4=cooks.distance(model.4)
+plot(cook.distance.model.4, ylab="Distancia de Cook")
+abline(h=1)
+
+# En este caso no se observan valores influyentes en el dataset ya que todos se encuentran por debajo del límite de 1 planteado dada la gran cantidad de observaciones que el dataset posee.
+
+# Verifico posibles outliers con los residuos studentizados
+student.residual.model.4 = rstudent(model.4)
+length(which(abs(student.residual.model.4) > 3))
+plot(student.residual.model.4, ylab="R studentizado")
+# En este caso la cantidad de observaciones consideradas como outliers para el modelo es mucho menor (solamente 51) en comparación a lo obtenido para los modelos lineales. Dada la baja cantidad dichas observaciones podrían ser removidas con el fin de poder observar cómo se comporta el modelo sin las mismas y evaluar si son influyentes o no para el modelo en el caso de que alguno de los coeficientes obtenidos en el entrenamiento de significativamente distinto.
+
+
+##### SUPUESTOS #####
+
+# Calculo los residuos del modelo.
+residuals.model.4 <- residuals(model.4, type="response")
+
+
+# Shapiro wilks (Normalidad de los errores)
+# Obtengo una muestra aleatoria para poder realizar el test de normalidad de Shapiro
+set.seed(333)
+residuals.model.4.sample <- sample(seq_len(length(residuals.model.4)), size = 5000)
+
+shapiro.test(residuals.model.4.sample)
+# El test de Shapiro rechaza la normalidad de los errores para el modelo cuatro, por lo cual no cumple el supuesto y el modelo no es válido para poder ser utilizado a menos que se aplique alguna transformación o se opte por una alternativa robusta.
+
+# Media cero en los residuos
+summary(residuals.model.4)
+# Los residuos muestran media cero por lo cual se cumple con dicho supuesto.
+
+# Test de autocorrelación de los errores (Durbin-Watson)
+# Nuevamente aplicamos el test de autocorrelación, pero ahora sobre el modelo cuatro.
+set.seed(333)
+durbinWatsonTest(model.4)
+# No rechaza la no autocorrelación, por lo tanto, no están correlacionados los errores con un grado de significación alpha=0.05
+
+# Test de homocedasticidad (Breusch Pagan)
+bptest(model.4)
+# El modelo no presenta homocedasticidad, por lo que puede ser útil aplicar una transformación de Box & Cox o la utilización de alguna alternativa robusta.
+
 # Valido con el set de testeo
 predicted.consumption.category <- predict(model.4, test.energy.logit)
 predicted.consumption.category <- ifelse(predicted.consumption.category > 0.5, 1, 0)
@@ -376,7 +412,7 @@ confusionMatrix(table)
 
 # Obtengo el accuracy del modelo. En este caso es un accuracy muy alto el que tiene el modelo. Dependiendo el caso del modelo, esta puede no ser una medida significativa si la cantidad de clases en la variable target se encuentran desbalanceadas. Para el caso de este modelo, donde la cantidad de elementos de la variable target perteneciente a ambas clases se encuentra balanceado es una medida útil, por lo cual se puede concluir que el modelo predice de manera satisfactoria la variable target.
 round((sum(diag(table)) / sum(table)) * 100, 2)
-summary(test.enery.logit)
+summary(test.energy.logit)
 
 # Obtengo los odds ratio (chance) de las variables del modelo
 odds.ratio(model.4)
@@ -385,7 +421,7 @@ odds.ratio(model.4)
 # Por otro lado, para el caso de Voltage, se puede interpretar que un aumento de una unidad en la variable tiene una probabilidad del 11% más que si la misma no aumentará para obtener un 1 en la variable avg.consumption.
 
 # Calculo la curva ROC del modelo
-roc(test.enery.logit$avg.consumption, predicted.consumption.category, print.auc = T, plot =T)
+roc(test.energy.logit$avg.consumption, predicted.consumption.category, print.auc = T, plot =T)
 # Claramente se puede observar como la gran importancia de la variable Global_intensity y su alta relación con la variable target dado que el valor de la curva ROC es casi 1 para la muestra aleatoria de datos que se obtuvieron al principio de este script. Esto quiere decir que el modelo predecirá de manera correcta prácticamente la totalidad de los casos que se le presenten.
 # Esta situación mencionada previamente es muy poco probable que ocurra en la práctica.
 
